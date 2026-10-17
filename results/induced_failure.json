@@ -1,0 +1,25 @@
+{
+  "baseline_dev_kappa": 0.8178,
+  "contaminated_dev_kappa": 0.9383,
+  "leaked_items_count": 10,
+  "baseline_dev_agreement": 0.9102,
+  "contaminated_dev_agreement": 0.971,
+  "baseline_dev_tpr": 0.9758,
+  "contaminated_dev_tpr": 1.0,
+  "leaked_item_ids": [
+    "item_0130",
+    "item_0007",
+    "item_0236",
+    "item_0048",
+    "item_0124",
+    "item_0097",
+    "item_0117",
+    "item_0009",
+    "item_0231",
+    "item_0008"
+  ],
+  "seed": 42,
+  "model": "gpt-4o-mini",
+  "judge_mode": "mock",
+  "explanation": "Induced failure: the 10 dev items closest to the judge's decision boundary (the borderline cases an engineer pastes into the prompt to debug) were added to the few-shot examples *with their labels*. The judge now recalls those labels from the prompt, so dev kappa rises even though the prompt generalises no better. This number is invalid for release gating; test is the only untouched split."
+}

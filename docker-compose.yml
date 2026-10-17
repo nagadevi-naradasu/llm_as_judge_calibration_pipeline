@@ -1,0 +1,50 @@
+name: llm-judge-calibration
+
+services:
+  judge-eval:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-judge-calibration:latest
+    # Mount the repo so results/ (and data/splits/) are written back to the host.
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      # Values are picked up from the host shell or the .env file next to this
+      # compose file. With no key the judge falls back to deterministic mock mode.
+      JUDGE_MODE: "${JUDGE_MODE:-auto}"
+      JUDGE_MODEL: "${JUDGE_MODEL:-gpt-4o-mini}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      RANDOM_SEED: "${RANDOM_SEED:-42}"
+      BOOTSTRAP_ITERATIONS: "${BOOTSTRAP_ITERATIONS:-1000}"
+      JUDGE_BUDGET_USD: "${JUDGE_BUDGET_USD:-5.00}"
+    command: ["python", "evaluate.py", "--split", "test"]
+    # One-shot batch job: exits 0 on success, non-zero if a contract breaks.
+
+  # Full pipeline (profile "full"): dev + frozen test + bias probes + leakage.
+  #   docker compose --profile full run --rm judge-pipeline
+  judge-pipeline:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-judge-calibration:latest
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      JUDGE_MODE: "${JUDGE_MODE:-auto}"
+      JUDGE_MODEL: "${JUDGE_MODEL:-gpt-4o-mini}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      RANDOM_SEED: "${RANDOM_SEED:-42}"
+      BOOTSTRAP_ITERATIONS: "${BOOTSTRAP_ITERATIONS:-1000}"
+    command: >
+      sh -c "python src/split_data.py --input data/labels.csv --output-dir data/splits/
+      && python evaluate.py --split dev
+      && python evaluate.py --split test
+      && python src/bias_probes.py
+      && python scripts/induce_leakage.py
+      && python -m pytest -q"

@@ -1,0 +1,5 @@
+probe_type,class,sample_size,position_flip_rate,pass_rate_before,pass_rate_after
+position,all,100,0.57,,
+verbosity,all,100,,0.5,0.54
+verbosity,pass,50,,0.96,0.96
+verbosity,fail,50,,0.04,0.12
