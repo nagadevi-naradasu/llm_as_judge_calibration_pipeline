@@ -122,6 +122,46 @@ Confusion (fail=positive): `tp=40, fn=5, tn=65, fp=3`.
 **Dev split** (`split=dev`, n=100): TPR 0.974, TNR 0.867, agreement 0.910,
 kappa 0.819.
 
+### Real hosted-model run (Gemini, OpenAI-compatible)
+
+The committed reference numbers above come from the deterministic mock backend
+(the no-key, fully reproducible path). To confirm the *same* code drives a
+real LLM judge end-to-end, I also ran the frozen test split against **Gemini**
+(`gemini-3.5-flash-lite`) through its OpenAI-compatible endpoint — zero code
+changes, only `OPENAI_BASE_URL` + `OPENAI_API_KEY` + `JUDGE_MODEL`. Artifacts
+are in [`results/gemini/`](results/gemini/).
+
+| metric | value | 95% CI |
+|--------|------:|--------|
+| TPR (fail caught) | 0.933 | [0.850, 1.000] |
+| TNR (pass kept) | 0.970 | [0.919, 1.000] |
+| agreement | 0.956 | [0.920, 0.991] |
+| Cohen's kappa | 0.910 | [0.820, 0.981] |
+
+Confusion (fail=positive): `tp=42, fn=3, tn=66, fp=2`; nominal spend ≈ `$0.19`.
+Dev split (n=100, `split=dev`) with the same judge: TPR 0.950 [0.875, 1.000],
+TNR 0.932 [0.867, 0.984], agreement 0.940, kappa 0.875.
+The judge clears the **same pre-registered gate** (both lower CI bounds ≥ 0.70:
+0.850, 0.919) on real data, and is *more* confident than the mock reference —
+which is exactly why the probe conclusions (position/verbosity bias) are the
+load-bearing part of this report, not the headline accuracy.
+
+To reproduce (free-tier Gemini; no OpenAI credits needed):
+
+```bash
+# in .env
+JUDGE_MODE=api
+OPENAI_API_KEY=<your-gemini-key>
+OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+JUDGE_MODEL=gemini-3.5-flash-lite
+JUDGE_MIN_INTERVAL_S=5      # respect free-tier rate limits
+python evaluate.py --split test --output-dir results/gemini
+```
+
+Rate-limit (429) and timeout errors are retried with backoff before the judge
+falls back to mock, so a slow provider degrades gracefully instead of poisoning
+the metrics.
+
 ### The number raw agreement hides
 
 A lazy judge that **always says Pass** scores `agreement = 0.602` on the test

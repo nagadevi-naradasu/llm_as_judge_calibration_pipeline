@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Dict, List, Optional
 
 try:  # optional at import time so mock mode works without the dependency
@@ -132,6 +133,10 @@ class LLMJudge:
         self.api_fallback = os.getenv("JUDGE_API_FALLBACK", "1").lower() not in {"0", "false", "no"}
         self.api_error: Optional[str] = None
         self._client = None
+        self._last_call_ts = 0.0
+        # Pace hosted calls to respect provider rate limits (seconds between
+        # calls). 0 disables throttling.
+        self.min_interval_s = float(os.getenv("JUDGE_MIN_INTERVAL_S", "0"))
 
     # -- backend selection ---------------------------------------------------
     @staticmethod
@@ -186,15 +191,72 @@ class LLMJudge:
             )
         self.mode = "mock"
 
+    @staticmethod
+    def _is_transient(exc: Exception) -> bool:
+        """Rate limits / timeouts / 5xx are worth retrying; auth/404 are not."""
+        code = getattr(exc, "status_code", None)
+        if code in {408, 409, 429, 500, 502, 503, 504}:
+            return True
+        return type(exc).__name__ in {
+            "RateLimitError", "APITimeoutError", "APIConnectionError",
+            "InternalServerError",
+        }
+
+    @staticmethod
+    def _retry_delay(exc: Exception, attempt: int) -> float:
+        """Honour the provider's Retry-After / retryDelay when present."""
+        resp = getattr(exc, "response", None)
+        headers = getattr(resp, "headers", None)
+        if headers:
+            ra = headers.get("retry-after") or headers.get("Retry-After")
+            if ra:
+                try:
+                    return min(float(ra), 120.0)
+                except ValueError:
+                    pass
+        m = re.search(r"retry(?:Delay)?[\"'=:\s]+([0-9.]+)s", str(exc))
+        if m:
+            return min(float(m.group(1)) + 1.0, 120.0)
+        return min(5.0 * (2 ** attempt), 120.0)
+
+    def _throttle(self) -> None:
+        if self.min_interval_s <= 0:
+            return
+        wait = self._last_call_ts + self.min_interval_s - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+
+    def _call_with_retries(self, *args, **kwargs) -> str:
+        attempts = int(os.getenv("JUDGE_API_ATTEMPTS", "6"))
+        last: Optional[Exception] = None
+        for attempt in range(attempts):
+            self._throttle()
+            try:
+                self._last_call_ts = time.monotonic()
+                return self._call_api(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                if not self._is_transient(exc):
+                    raise
+                last = exc
+                delay = self._retry_delay(exc, attempt)
+                print(
+                    f"[judge] transient error ({type(exc).__name__}); retry "
+                    f"{attempt + 1}/{attempts} in {delay:.0f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+        assert last is not None
+        raise last
+
     def evaluate(self, generated_text: str) -> dict:
         """Grade one summary. Always returns {"critique": str, "pass": bool}."""
         self.calls += 1
         if self.mode == "api":
             try:
-                raw = self._call_api(generated_text)
+                raw = self._call_with_retries(generated_text)
                 result = self._parse(raw)
                 if result is None:
-                    raw = self._call_api(generated_text, force_plain=True)
+                    raw = self._call_with_retries(generated_text, force_plain=True)
                     result = self._parse(raw) or {
                         "critique": f"Unparseable judge output; treated as FAIL: {raw[:200]}",
                         "pass": False,
@@ -215,7 +277,7 @@ class LLMJudge:
                     f"Candidate A:\n{text_a}\n\nCandidate B:\n{text_b}\n\n"
                     "Which is better? Return JSON with critique and preferred."
                 )
-                raw = self._call_api(user, system_prompt=system_prompt, pairwise=True)
+                raw = self._call_with_retries(user, system_prompt=system_prompt, pairwise=True)
                 parsed = self._parse(raw, pairwise=True)
                 if parsed is None:
                     return {"critique": raw[:200], "preferred": "A"}
