@@ -93,14 +93,14 @@ def cmd_evaluate(args) -> int:
         seed=args.seed,
     )
 
-    os.makedirs(RESULTS_DIR, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
     row = {"split": args.split, "iteration": args.iteration,
            "model": args.model, "judge_mode": judge.mode, **metrics}
-    metrics_path = os.path.join(RESULTS_DIR, "metrics.csv")
+    metrics_path = os.path.join(args.output_dir, "metrics.csv")
     upsert_metrics(row, metrics_path)
 
     if args.split == "test":
-        preds.to_csv(os.path.join(RESULTS_DIR, "judge_test.csv"), index=False)
+        preds.to_csv(os.path.join(args.output_dir, "judge_test.csv"), index=False)
 
     print(f"[{args.split}] TPR={metrics['tpr_mean']:.3f} "
           f"[{metrics['tpr_ci_low']:.3f},{metrics['tpr_ci_high']:.3f}]  "
@@ -133,6 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="prompt iteration index recorded in metrics.csv")
     ap.add_argument("--budget", type=float,
                     default=float(os.getenv("JUDGE_BUDGET_USD", "5.0")))
+    ap.add_argument("--output-dir", default=RESULTS_DIR,
+                    help="directory for metrics.csv / judge_test.csv (default results/)")
     return ap
 
 

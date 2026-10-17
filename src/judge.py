@@ -154,6 +154,8 @@ class LLMJudge:
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=os.getenv("OPENAI_BASE_URL") or None,
+                timeout=float(os.getenv("JUDGE_TIMEOUT", "120")),
+                max_retries=int(os.getenv("JUDGE_MAX_RETRIES", "1")),
             )
         return self._client
 
@@ -235,6 +237,7 @@ class LLMJudge:
             "model": self.model_name,
             "messages": messages,
             "temperature": self.temperature,
+            "max_tokens": int(os.getenv("JUDGE_MAX_TOKENS", "400")),
         }
         if not force_plain:
             kwargs["response_format"] = {"type": "json_object"}

@@ -74,20 +74,25 @@ numbers.
 
 * **Structured output.** `LLMJudge.evaluate(text)` always returns
   `{"critique": str, "pass": bool}`. The system prompt embeds the rubric, an
-  exact JSON schema, and the Train few-shot examples; the hosted path requests
+  exact JSON schema, and the Train few-shot examples (all 37 by default; set
+  `JUDGE_FEWSHOT=N` to embed a balanced subset of N, which shortens the prompt
+  when serving a slow local model); the hosted path requests
   `response_format={"type":"json_object"}`; a regex fallback extracts the first
   `{...}` block if the model adds prose.
 * **Chain-of-thought first.** The contract forces `critique` *before* `pass`.
 * **Budget guard.** `self.spend` accumulates real (hosted) or nominal (mock)
   dollars; `JudgeBudgetExceeded` fires past `JUDGE_BUDGET_USD` (default $5).
 * **Two backends, one interface.** `JUDGE_MODE=api` calls an OpenAI-compatible
-  endpoint (`OPENAI_API_KEY` / `OPENAI_BASE_URL`); `JUDGE_MODE=mock` is a
-  deterministic offline reference judge; `auto` picks API when a key exists and
-  mock otherwise. The mock exists so the pipeline is **reproducible with no key
-  and no network**; it applies the same rubric features
-  (`src/features.py`) deterministically and injects seeded noise so its error
-  rates are realistic rather than perfect. When the grader injects a key (per
-  [`submission.json`](submission.json)) the identical prompt goes to
+  endpoint (`OPENAI_API_KEY` / `OPENAI_BASE_URL`, so it also works against a
+  local Ollama server); `JUDGE_MODE=mock` is a deterministic offline reference
+  judge; `auto` picks API when a key exists and mock otherwise. If the hosted
+  API fails at runtime (bad key, no credits, offline) the judge logs a warning
+  and **falls back to the mock for the rest of the run** instead of crashing
+  (`JUDGE_API_FALLBACK=0` disables this). The mock exists so the pipeline is
+  **reproducible with no key and no network**; it applies the same rubric
+  features (`src/features.py`) deterministically and injects seeded noise so its
+  error rates are realistic rather than perfect. When the grader injects a key
+  (per [`submission.json`](submission.json)) the identical prompt goes to
   `gpt-4o-mini`.
 
 Verify the JSON contract by hand:
