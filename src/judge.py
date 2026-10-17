@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from typing import Dict, List, Optional
 
 try:  # optional at import time so mock mode works without the dependency
@@ -124,6 +125,12 @@ class LLMJudge:
         self.spend = 0.0
         self.calls = 0
         self.mode = self._resolve_mode(mode)
+        # When a hosted call fails (no credits, bad key, network), don't crash
+        # the pipeline: warn once and fall back to the deterministic mock so
+        # `docker compose up` still exits 0 and produces artifacts. Set
+        # JUDGE_API_FALLBACK=0 to fail loudly instead.
+        self.api_fallback = os.getenv("JUDGE_API_FALLBACK", "1").lower() not in {"0", "false", "no"}
+        self.api_error: Optional[str] = None
         self._client = None
 
     # -- backend selection ---------------------------------------------------
@@ -163,34 +170,58 @@ class LLMJudge:
         return {ex["output"] for ex in self.few_shot_examples}
 
     # -- public API ----------------------------------------------------------
+    def _fallback_to_mock(self, exc: Exception) -> None:
+        """Record the hosted failure and permanently switch to the mock backend."""
+        if not self.api_fallback:
+            raise exc
+        self.api_error = f"{type(exc).__name__}: {exc}"
+        if self.mode != "mock":
+            print(
+                "[judge] WARNING: hosted judge unavailable "
+                f"({self.api_error}); falling back to the deterministic mock "
+                "backend for the rest of this run.",
+                file=sys.stderr,
+            )
+        self.mode = "mock"
+
     def evaluate(self, generated_text: str) -> dict:
         """Grade one summary. Always returns {"critique": str, "pass": bool}."""
         self.calls += 1
         if self.mode == "api":
-            raw = self._call_api(generated_text)
-            result = self._parse(raw)
-            if result is None:
-                raw = self._call_api(generated_text, force_plain=True)
-                result = self._parse(raw) or {
-                    "critique": f"Unparseable judge output; treated as FAIL: {raw[:200]}",
-                    "pass": False,
-                }
-            return result
+            try:
+                raw = self._call_api(generated_text)
+                result = self._parse(raw)
+                if result is None:
+                    raw = self._call_api(generated_text, force_plain=True)
+                    result = self._parse(raw) or {
+                        "critique": f"Unparseable judge output; treated as FAIL: {raw[:200]}",
+                        "pass": False,
+                    }
+                return result
+            except JudgeBudgetExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully
+                self._fallback_to_mock(exc)
         return self._mock_evaluate(generated_text)
 
     def compare(self, text_a: str, text_b: str, system_prompt: str) -> dict:
         """Pairwise preference. Returns {"critique": str, "preferred": "A"|"B"}."""
         self.calls += 1
         if self.mode == "api":
-            user = (
-                f"Candidate A:\n{text_a}\n\nCandidate B:\n{text_b}\n\n"
-                "Which is better? Return JSON with critique and preferred."
-            )
-            raw = self._call_api(user, system_prompt=system_prompt, pairwise=True)
-            parsed = self._parse(raw, pairwise=True)
-            if parsed is None:
-                return {"critique": raw[:200], "preferred": "A"}
-            return parsed
+            try:
+                user = (
+                    f"Candidate A:\n{text_a}\n\nCandidate B:\n{text_b}\n\n"
+                    "Which is better? Return JSON with critique and preferred."
+                )
+                raw = self._call_api(user, system_prompt=system_prompt, pairwise=True)
+                parsed = self._parse(raw, pairwise=True)
+                if parsed is None:
+                    return {"critique": raw[:200], "preferred": "A"}
+                return parsed
+            except JudgeBudgetExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully
+                self._fallback_to_mock(exc)
         return self._mock_compare(text_a, text_b)
 
     # -- hosted backend ------------------------------------------------------

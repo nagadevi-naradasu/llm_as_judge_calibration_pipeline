@@ -66,3 +66,28 @@ def test_compare_returns_preference():
     out = judge.compare("text a", "text b", "pairwise system prompt")
     assert out["preferred"] in {"A", "B"}
     assert isinstance(out["critique"], str)
+
+
+def test_api_failure_falls_back_to_mock(monkeypatch):
+    judge = LLMJudge(system_prompt="x", mode="api")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("insufficient_quota")
+
+    monkeypatch.setattr(judge, "_call_api", boom)
+    out = judge.evaluate("api/gateway.py raises ETIMEDOUT; root cause is a reset (#12).")
+    assert set(out) == {"critique", "pass"}
+    assert judge.mode == "mock"
+    assert judge.api_error and "insufficient_quota" in judge.api_error
+
+
+def test_api_failure_raises_when_fallback_disabled(monkeypatch):
+    judge = LLMJudge(system_prompt="x", mode="api")
+    judge.api_fallback = False
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("bad key")
+
+    monkeypatch.setattr(judge, "_call_api", boom)
+    with pytest.raises(RuntimeError):
+        judge.evaluate("some text")
